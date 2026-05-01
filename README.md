@@ -2,12 +2,30 @@
 
 Minimal full-stack expense tracker built with Django, server-rendered HTML, and basic JavaScript.
 
-## Tech choices
+## Notes on the implementation
 
-- Backend: Django with thin views and service-layer functions in `expenses/services.py`.
-- Persistence: SQLite via Django ORM.
-  SQLite is a good fit here because it is durable, requires no separate service to run the assignment, and still gives us transactional behavior for idempotent request handling.
-- Frontend: a single Django template with basic JavaScript and CSS.
+### Key design decisions
+
+- I used Django with server-rendered HTML and a small amount of vanilla JavaScript. For this assignment, that felt like the simplest way to keep the stack easy to run while still separating backend and frontend responsibilities cleanly.
+- The backend is split into thin views and service functions. The views in `expenses/views.py` handle HTTP concerns, while `expenses/services.py` contains the logic for creating and listing expenses. That keeps the code easier to extend and test.
+- I used SQLite through the Django ORM for persistence. It is durable, works well for a small assignment, and does not require any external setup. It also gives transactional behavior, which is useful for handling idempotent create requests safely.
+- Money is stored using `DecimalField` rather than floats, because even in a small expense tracker it is better to avoid floating-point issues for currency values.
+- To handle retries and refreshes safely, the create endpoint expects an `Idempotency-Key`. I store that key with a hash of the request payload so the server can distinguish a real retry from a different request that accidentally reused the same key.
+
+### Trade-offs made because of the timebox
+
+- The UI is intentionally simple. I focused more on correctness, clear behavior, and resilience than on advanced styling or richer interactions.
+- I kept the frontend in a single template with inline JavaScript instead of introducing a larger frontend structure. That keeps the assignment small and readable, though in a larger app I would likely split the JavaScript into separate files or use a frontend framework if the complexity justified it.
+- The filtering and sorting needs for this assignment are small, so I kept them limited to category filtering and newest-first sorting by date instead of building a broader query system.
+- The idempotency flow is implemented for the create-expense path only, since that is the place where retries matter most for this assignment.
+
+### Things I intentionally did not do
+
+- I did not add authentication or user accounts. The assignment reads like a single-user personal finance tool, so I kept the scope focused on expense tracking itself.
+- I did not add edit/delete expense actions, pagination, category management, CSV export, or charts. Those would be reasonable next steps, but they were outside the requested feature set.
+- I did not build a full API versioning strategy or introduce Django REST Framework, because the required API surface is small and standard Django is enough here.
+- I did not add background jobs, optimistic UI updates, or offline-first sync. The app does handle retries and refreshes safely, but it stops short of being a full offline-capable experience.
+- I did not commit the SQLite database file. The schema is created through migrations, and keeping the database out of git makes the repository cleaner.
 
 ## Features
 
