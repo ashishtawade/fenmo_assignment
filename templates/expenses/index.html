@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expense Tracker</title>
+    <link rel="stylesheet" href="/static/expenses/styles.css">
+</head>
+<body>
+    <main class="page">
+        <section class="panel panel-form">
+            <div class="eyebrow">Personal Finance</div>
+            <h1>Expense Tracker</h1>
+            <p class="intro">Record expenses, filter by category, and keep a running total for the list you are looking at.</p>
+
+            <form id="expense-form" class="expense-form">
+                <div class="field-grid">
+                    <label>
+                        <span>Amount</span>
+                        <input type="number" name="amount" min="0.01" step="0.01" required>
+                    </label>
+                    <label>
+                        <span>Category</span>
+                        <input type="text" name="category" maxlength="100" placeholder="Food, Travel, Bills" required>
+                    </label>
+                    <label class="full-width">
+                        <span>Description</span>
+                        <input type="text" name="description" maxlength="255" placeholder="Coffee with a client" required>
+                    </label>
+                    <label>
+                        <span>Date</span>
+                        <input type="date" name="date" required>
+                    </label>
+                </div>
+
+                <div id="form-errors" class="form-errors" aria-live="polite"></div>
+                <div class="form-actions">
+                    <button type="submit" id="submit-button">Save expense</button>
+                    <span id="form-status" class="form-status" aria-live="polite"></span>
+                </div>
+            </form>
+        </section>
+
+        <section class="panel panel-list">
+            <div class="toolbar">
+                <div>
+                    <div class="eyebrow">Overview</div>
+                    <h2>Expenses</h2>
+                </div>
+                <div class="toolbar-controls">
+                    <label>
+                        <span>Category</span>
+                        <select id="category-filter">
+                            <option value="">All categories</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>Sort</span>
+                        <select id="sort-filter">
+                            <option value="date_desc" selected>Newest first</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            <div class="summary">
+                <span>Total</span>
+                <strong id="total-value">₹0.00</strong>
+            </div>
+
+            <div id="list-status" class="list-status" aria-live="polite"></div>
+            <div id="expense-list" class="expense-list"></div>
+        </section>
+    </main>
+
+    <script>
+        const expenseForm = document.getElementById("expense-form");
+        const submitButton = document.getElementById("submit-button");
+        const formErrors = document.getElementById("form-errors");
+        const formStatus = document.getElementById("form-status");
+        const listStatus = document.getElementById("list-status");
+        const expenseList = document.getElementById("expense-list");
+        const totalValue = document.getElementById("total-value");
+        const categoryFilter = document.getElementById("category-filter");
+        const sortFilter = document.getElementById("sort-filter");
+
+        const pendingRequestStorageKey = "expense-tracker-pending-request";
+
+        function getCookie(name) {
+            const cookieValue = document.cookie
+                .split("; ")
+                .find((row) => row.startsWith(`${name}=`));
+            return cookieValue ? decodeURIComponent(cookieValue.split("=")[1]) : null;
+        }
+
+        function formatCurrency(amount) {
+            return new Intl.NumberFormat("en-IN", {
+                style: "currency",
+                currency: "INR",
+            }).format(Number(amount || 0));
+        }
+
+        function buildQuery() {
+            const params = new URLSearchParams();
+            if (categoryFilter.value) {
+                params.set("category", categoryFilter.value);
+            }
+            if (sortFilter.value) {
+                params.set("sort", sortFilter.value);
+            }
+            return params.toString() ? `?${params.toString()}` : "";
+        }
+
+        function renderExpenses(expenses) {
+            if (!expenses.length) {
+                expenseList.innerHTML = '<div class="empty-state">No expenses match the current filter.</div>';
+                return;
+            }
+
+            expenseList.innerHTML = expenses.map((expense) => `
+                <article class="expense-card">
+                    <div class="expense-card__top">
+                        <strong>${expense.category}</strong>
+                        <span>${formatCurrency(expense.amount)}</span>
+                    </div>
+                    <p>${expense.description}</p>
+                    <div class="expense-card__meta">
+                        <span>${expense.date}</span>
+                        <span>Created ${new Date(expense.created_at).toLocaleString("en-IN")}</span>
+                    </div>
+                </article>
+            `).join("");
+        }
+
+        function updateCategoryOptions(categories) {
+            const current = categoryFilter.value;
+            categoryFilter.innerHTML = '<option value="">All categories</option>' +
+                categories.map((category) => `<option value="${category}">${category}</option>`).join("");
+            categoryFilter.value = categories.includes(current) ? current : "";
+        }
+
+        async function loadExpenses() {
+            listStatus.textContent = "Loading expenses...";
+            try {
+                const response = await fetch(`/expenses${buildQuery()}`);
+                if (!response.ok) {
+                    throw new Error("Failed to load expenses.");
+                }
+                const data = await response.json();
+                renderExpenses(data.expenses);
+                totalValue.textContent = formatCurrency(data.total);
+                updateCategoryOptions(data.categories);
+                listStatus.textContent = "";
+            } catch (error) {
+                listStatus.textContent = "Could not load expenses. Please retry.";
+            }
+        }
+
+        function readFormValues() {
+            const formData = new FormData(expenseForm);
+            return {
+                amount: formData.get("amount"),
+                category: formData.get("category"),
+                description: formData.get("description"),
+                date: formData.get("date"),
+            };
+        }
+
+        function createPendingRequest(payload) {
+            return {
+                idempotencyKey: self.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+                payload,
+            };
+        }
+
+        function renderErrors(errors) {
+            const lines = Object.values(errors).flat();
+            formErrors.innerHTML = lines.map((message) => `<div>${message}</div>`).join("");
+        }
+
+        async function readErrorPayload(response) {
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                return response.json();
+            }
+
+            const text = await response.text();
+            return {
+                errors: {
+                    general: [text || "Request failed before the app could return JSON."],
+                },
+            };
+        }
+
+        async function submitExpense(pendingRequest) {
+            submitButton.disabled = true;
+            formStatus.textContent = "Saving...";
+            formErrors.innerHTML = "";
+            localStorage.setItem(pendingRequestStorageKey, JSON.stringify(pendingRequest));
+
+            try {
+                const response = await fetch("/expenses", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": pendingRequest.idempotencyKey,
+                        "X-CSRFToken": getCookie("csrftoken"),
+                    },
+                    body: JSON.stringify(pendingRequest.payload),
+                });
+
+                if (!response.ok) {
+                    const data = await readErrorPayload(response);
+                    renderErrors(data.errors || { general: ["Could not save expense."] });
+                    formStatus.textContent = "";
+                    return;
+                }
+
+                await response.json();
+                localStorage.removeItem(pendingRequestStorageKey);
+                expenseForm.reset();
+                formStatus.textContent = "Expense saved.";
+                await loadExpenses();
+            } catch (error) {
+                formStatus.textContent = "Network issue detected. Reloading will retry the same request safely.";
+            } finally {
+                submitButton.disabled = false;
+            }
+        }
+
+        expenseForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const pendingRequest = createPendingRequest(readFormValues());
+            await submitExpense(pendingRequest);
+        });
+
+        categoryFilter.addEventListener("change", loadExpenses);
+        sortFilter.addEventListener("change", loadExpenses);
+
+        window.addEventListener("load", async () => {
+            const today = new Date().toISOString().slice(0, 10);
+            expenseForm.elements.date.value = today;
+            await loadExpenses();
+
+            const pending = localStorage.getItem(pendingRequestStorageKey);
+            if (pending) {
+                formStatus.textContent = "Retrying your last unsent request...";
+                await submitExpense(JSON.parse(pending));
+            }
+        });
+    </script>
+</body>
+</html>
